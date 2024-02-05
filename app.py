@@ -13,15 +13,28 @@ from langchain_community.vectorstores import FAISS
 from PyPDF2 import PdfReader
 from pydantic import BaseModel
 from typing import List
-import json
 
 load_dotenv()
 genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
 vector_store_name = "vector_store"
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(filename=f"app.log", level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+class Option(BaseModel):
+    desc: str
+    answer: bool
+
+
+class Question(BaseModel):
+    desc: str
+    options: List[Option]
+
+
+class Assessment(BaseModel):
+    questions: List[Question]
 
 
 # Extract text from pdf.
@@ -56,16 +69,6 @@ def set_vector_store(text_chunks):
     vector_store.save_local(vector_store_name)
 
 
-class Question(BaseModel):
-    question: str
-    options: List[str]
-    correct_answers: List[int]
-
-
-class Assessment(BaseModel):
-    questions: List[Question]
-
-
 # Generate response using the vector store and model.
 def get_response(role):
     # Set up a parser + inject instructions into the prompt template.
@@ -73,7 +76,7 @@ def get_response(role):
     format_instructions = pydantic_parser.get_format_instructions()
 
     query = f"""
-    Provide a detailed explanation of each of the uploaded document.
+    Provide a detailed explanation of each of the uploaded documents.
     Make sure that the explanation has the necessary information to test the knowledge of a {role}.
     """
     try:
@@ -103,7 +106,7 @@ def get_response(role):
 
     try:
         output = model(messages=messages)
-        logger.debug(f"Model output:\n{output}")
+        logger.info(f"Model output:\n{output}")
     except Exception as e:
         logger.exception(f"Error fetching model output:\n{e}")
         return None
@@ -116,69 +119,86 @@ def get_response(role):
     return response
 
 
-def display_assessment(assessment, check_answers):
-    user_answers = {i: [] for i in range(len(assessment.questions))}
+# Return True if its a multiple choice question.
+def is_multiple_choice(question):
+    count = 0
+    for option in question.options:
+        if option.answer:
+            count += 1
+            if count > 1:
+                return True
+    return False
 
-    for i, qna in enumerate(assessment.questions):
-        numbered_question = f"{i + 1}) {qna.question}"
+
+# Check the answer of a multiple choice question.
+def is_mc_correct(options, user_selection):
+    if not user_selection:
+        return False
+    for option in options:
+        if user_selection[option.desc] != option.answer:
+            return False
+    return True
+
+
+# Check the answer of a single choice question.
+def is_sc_correct(options, user_selection):
+    if not user_selection:
+        return False
+    for option in options:
+        if option.desc == user_selection and option.answer is False:
+            return False
+    return True
+
+
+# Display the assessment.
+# If the "check_answers" has been clicked, display the answers too.
+def display_assessment(assessment):
+    for i, question in enumerate(assessment.questions):
+        numbered_question = f"{i + 1}) {question.desc}"
         st.write("\n\n")
-
-        l = len(qna.correct_answers)
-        if l == 1:
-            st.write(numbered_question)
-            selection = st.radio(
-                label="label",
+        st.write(numbered_question)
+        if is_multiple_choice(question):  # multiple choice question
+            st.write("\n")
+            user_selection = {}
+            for option in question.options:
+                user_selection[option.desc] = st.checkbox(label=option.desc)
+            if st.session_state["check_answers"]:
+                if is_mc_correct(question.options, user_selection):
+                    st.success("Correct Answer.")
+                else:
+                    correct_answers = ""
+                    for option in question.options:
+                        if option.answer:
+                            correct_answers = (
+                                correct_answers + f"'{option.desc}'" + " and"
+                            )
+                    correct_answers = correct_answers.rstrip("  and")
+                    st.error(f"Wrong Answer. The correct answer is: {correct_answers}")
+        else:  # single choice question
+            options = []
+            for option in question.options:
+                options.append(option.desc)
+            user_selection = st.radio(
+                label="placeholder",
                 label_visibility="hidden",
-                options=qna.options,
+                options=options,
                 index=None,
             )
-            user_answers[i].append(selection)
-            if check_answers:
-                if qna.options[qna.correct_answers[0]] not in user_answers[i]:
-                    st.error(
-                        f"Wrong answer. The correct answer is: '{qna.options[qna.correct_answers[0]]}'"
-                    )
+            if st.session_state["check_answers"]:
+                if is_sc_correct(question.options, user_selection):
+                    st.success("Correct Answer.")
                 else:
-                    st.success("Correct answer.")
-
-        elif l > 1:
-            st.write(numbered_question)
-            st.write("\n")
-            for j, option in enumerate(qna.options):
-                selection = st.checkbox(label=option)
-                if selection:
-                    user_answers[i].append(j)
-            if check_answers:
-                if sorted(user_answers[i]) != sorted(qna.correct_answers):
-                    msg = "Wrong answer. The correct answer is:"
-                    for j in qna.correct_answers:
-                        msg = msg + f" '{qna.options[j]}' and"
-                    st.error(msg.rstrip(" and"))
-                else:
-                    st.success("Correct answer.")
-        else:
-            st.warning("Model did not generate answers.")
-
-    return user_answers
+                    correct_answer = ""
+                    for option in question.options:
+                        if option.answer:
+                            correct_answer = option.desc
+                            break
+                    st.error(f"Wrong Answer. The correct answer is: '{correct_answer}'")
 
 
-def check_answer(qna):
-    user_choices = get_user_choices(qna)
-    correct_choices = qna.correct_answers
-
-    if set(user_choices) == set(correct_choices):
-        st.success("Correct Answer")
-    else:
-        correct_options = [qna.options[i] for i in correct_choices]
-        st.error(f"Wrong Answer. The correct answer is {', '.join(correct_options)}")
-
-
-def get_user_choices(qna):
-    user_choices = []
-    for i, option in enumerate(qna.options):
-        if st.checkbox(option):
-            user_choices.append(i)
-    return user_choices
+# Set the "check_answers" session state when the Check Answers button is clicked.
+def handle_check_answers():
+    st.session_state["check_answers"] = True
 
 
 # Streamlit app
@@ -202,6 +222,7 @@ def main():
                     text_chunks = get_text_chunks(pdf_text)
                     set_vector_store(text_chunks)
                     model_response = get_response(role="Senior Software Engineer")
+                    st.session_state["check_answers"] = False
 
                     if model_response:
                         st.session_state["model_response"] = model_response
@@ -211,8 +232,11 @@ def main():
                     st.warning("Please select PDFs to upload.")
 
     if "model_response" in st.session_state:
-        check_answers = st.button("Check Answers")
-        display_assessment(st.session_state["model_response"], check_answers)
+        display_assessment(st.session_state["model_response"])
+
+        if not st.session_state["check_answers"]:
+            st.write("\n\n")
+            st.button("Check Answers", on_click=handle_check_answers)
 
     else:
         st.write("👈 Get started by uploading the PDFs and generating the quiz.")
