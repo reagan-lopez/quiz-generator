@@ -58,8 +58,8 @@ class AppCore:
 
     # Embed the chunks and insert into vector store.
     def set_vector_store(self, text_chunks):
-        vector_store = FAISS.from_texts(text_chunks, embedding=embeddings)
-        vector_store.save_local(vector_store_name)
+        quiz_embeddings = FAISS.from_texts(text_chunks, embedding=embeddings)
+        self.store.set_quiz_embeddings(quiz_embeddings)
 
     # Generate response using the vector store and model.
     def get_response(self, role):

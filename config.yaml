@@ -1,0 +1,19 @@
+credentials:
+  usernames:
+    orencostudios:
+      email: orencostudios@gmail.com
+      logged_in: False # Will be managed automatically
+      name: Orenco Studios
+      password: abc # Will be hashed automatically
+    orencolabs:
+      email: orencolabs@gmail.com
+      logged_in: False # Will be managed automatically
+      name: Orenco Labs
+      password: def # Will be hashed automatically
+cookie:
+  expiry_days: 30
+  key: qgcookiekey # Must be string
+  name: qgcookiename
+preauthorized:
+  emails:
+    - reaganlopez@gmail.com
